@@ -1,0 +1,11 @@
+services:
+  lasagne:
+    container_name: lasagne
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - ./:/app/
+    stdin_open: true
+    tty: true
+    command: ["tail", "-f", "/dev/null"]

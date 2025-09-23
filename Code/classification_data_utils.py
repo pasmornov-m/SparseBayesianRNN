@@ -4,7 +4,7 @@ import os
 import re
 from collections import defaultdict
 import operator
-import pandas as pd
+# import pandas as pd
 
 import struct
 import sys
@@ -156,24 +156,49 @@ def generate_vocab_paths(paths, lower=False):
                             doc_seen.add(token)
     return vocab_freqs, doc_counts
 
+# def generate_vocab_tab(tab_path, lower=False):
+#     vocab_freqs = defaultdict(int)
+#     doc_counts = defaultdict(int)
+#     tab = pd.read_csv(tab_path).values
+#     for row in tab:
+#         label, doc = float(row[0]), " ".join(row[1:])
+#         if lower:
+#             doc = doc.lower()
+#         doc_seen = set()
+        
+#         tokens = [s for s in re.split(r'\W+', doc) 
+#                   if s and not s.isspace()]
+
+#         for token in tokens:
+#             vocab_freqs[token] += 1
+#             if token not in doc_seen:
+#                 doc_counts[token] += 1
+#                 doc_seen.add(token)
+#     return vocab_freqs, doc_counts
+
 def generate_vocab_tab(tab_path, lower=False):
+    import csv
     vocab_freqs = defaultdict(int)
     doc_counts = defaultdict(int)
-    tab = pd.read_csv(tab_path).values
-    for row in tab:
-        label, doc = float(row[0]), " ".join(row[1:])
-        if lower:
-            doc = doc.lower()
-        doc_seen = set()
-        
-        tokens = [s for s in re.split(r'\W+', doc) 
-                  if s and not s.isspace()]
+    
+    with open(tab_path, 'r', encoding='utf-8') as f:
+        reader = csv.reader(f)
+        # next(reader)  # Пропускаем заголовок, если есть
+        for row in reader:
+            if not row:
+                continue
+            label, *text_parts = row
+            doc = ' '.join(text_parts)
+            if lower:
+                doc = doc.lower()
+            doc_seen = set()
 
-        for token in tokens:
-            vocab_freqs[token] += 1
-            if token not in doc_seen:
-                doc_counts[token] += 1
-                doc_seen.add(token)
+            tokens = [s for s in re.split(r'\W+', doc) if s and not s.isspace()]
+            for token in tokens:
+                vocab_freqs[token] += 1
+                if token not in doc_seen:
+                    doc_counts[token] += 1
+                    doc_seen.add(token)
     return vocab_freqs, doc_counts
 
 def generate_vocab(paths=None,\
@@ -185,7 +210,7 @@ def generate_vocab(paths=None,\
     
         if paths is not None:
             vocab_freqs, doc_counts = generate_vocab_paths(paths, lower)
-        elif tab is not None:
+        elif tab_path is not None:
             vocab_freqs, doc_counts = generate_vocab_tab(tab_path, lower)
         else:
             raise ValueError("Either paths or tab must be provided")
@@ -210,60 +235,123 @@ def generate_vocab(paths=None,\
             fout.write("\n".join(words))
         return ordered_vocab_freqs
 
+# def process_text_agnews(tab_path_train, tab_path_test, \
+#                       path_to_save="./", \
+#                       lower=True, max_vocab_size=100*1000,
+#                       doc_count_threshold=1):
+#     """
+#     adapted from TensorFlow: 
+#     https://github.com/tensorflow/models/blob/
+#            master/research/adversarial_text/data/
+           
+#     transforms texts into ids seq
+#     creates npz file with 5 keys: x_train, x_test (arrays of lists), 
+#                                   y_train, y_test (arrays of labels),
+#                                   array of words sorted by desc. freq
+#     """
+    
+#     eos_symb = "</s>"
+#     def generate_texts(tab_path, vocab_freqs, lower=True):
+#         docs = []
+#         targets = []
+#         vocab_ids = dict([(line[0].strip(), i) for i, line 
+#                   in enumerate(vocab_freqs)])
+#         tab = pd.read_csv(tab_path).values
+#         for row in tab:
+#             label, doc = int(row[0]), " ".join(row[1:])
+#             if lower:
+#                 doc = doc.lower()
+
+#             tokens = [s for s in re.split(r'\W+', doc) 
+#                       if s and not s.isspace()]
+#             ids = []
+#             for token in tokens:
+#                 if token in vocab_ids:
+#                     ids.append(vocab_ids[token])
+#             ids.append(vocab_ids[eos_symb])
+#             if len(ids) < 2:
+#                 continue
+#             docs.append(ids)
+#             targets.append(label)
+
+#         return docs, targets
+
+#     vocab_freqs = generate_vocab(tab_path=tab_path_train, \
+#                                  max_vocab_size=max_vocab_size,\
+#                                  doc_count_threshold=doc_count_threshold, \
+#                                  lower=lower,\
+#                                  save_path=os.path.join(path_to_save, "agnews_words.txt"))
+#     docs_train, targets_train = generate_texts(tab_path_train,\
+#                                                vocab_freqs, lower)
+#     docs_test, targets_test = generate_texts(tab_path_test,\
+#                                              vocab_freqs, lower)
+#     np.savez(os.path.join(path_to_save, "agnews_texts"), x_train=docs_train, x_test=docs_test,
+#             y_train=targets_train, y_test=targets_test, 
+#             vocab=np.array([item[0] for item in vocab_freqs]))
+#     return path_to_save+".npz"
+
 def process_text_agnews(tab_path_train, tab_path_test, \
                       path_to_save="./", \
                       lower=True, max_vocab_size=100*1000,
                       doc_count_threshold=1):
     """
-    adapted from TensorFlow: 
-    https://github.com/tensorflow/models/blob/
-           master/research/adversarial_text/data/
-           
-    transforms texts into ids seq
-    creates npz file with 5 keys: x_train, x_test (arrays of lists), 
-                                  y_train, y_test (arrays of labels),
-                                  array of words sorted by desc. freq
+    Преобразует тексты из CSV в последовательности ID.
+    Создаёт .npz файл с x_train, x_test, y_train, y_test, vocab.
     """
-    
+
     eos_symb = "</s>"
+
     def generate_texts(tab_path, vocab_freqs, lower=True):
+        import csv
         docs = []
         targets = []
-        vocab_ids = dict([(line[0].strip(), i) for i, line 
-                  in enumerate(vocab_freqs)])
-        tab = pd.read_csv(tab_path).values
-        for row in tab:
-            label, doc = int(row[0]), " ".join(row[1:])
-            if lower:
-                doc = doc.lower()
+        vocab_ids = {line[0].strip(): i for i, line in enumerate(vocab_freqs)}
 
-            tokens = [s for s in re.split(r'\W+', doc) 
-                      if s and not s.isspace()]
-            ids = []
-            for token in tokens:
-                if token in vocab_ids:
-                    ids.append(vocab_ids[token])
-            ids.append(vocab_ids[eos_symb])
-            if len(ids) < 2:
-                continue
-            docs.append(ids)
-            targets.append(label)
+        with open(tab_path, 'r', encoding='utf-8') as f:
+            reader = csv.reader(f)
+            next(reader)  # Пропустить заголовок
+            for row in reader:
+                if not row:
+                    continue
+                label, *text_parts = row
+                doc = ' '.join(text_parts)
+                if lower:
+                    doc = doc.lower()
 
+                tokens = [s for s in re.split(r'\W+', doc) if s and not s.isspace()]
+                ids = []
+                for token in tokens:
+                    if token in vocab_ids:
+                        ids.append(vocab_ids[token])
+                ids.append(vocab_ids[eos_symb])  # EOS токен
+                if len(ids) >= 2:
+                    docs.append(ids)
+                    targets.append(int(label))
         return docs, targets
 
-    vocab_freqs = generate_vocab(tab_path=tab_path_train, \
-                                 max_vocab_size=max_vocab_size,\
-                                 doc_count_threshold=doc_count_threshold, \
-                                 lower=lower,\
-                                 save_path=os.path.join(path_to_save, "agnews_words.txt"))
-    docs_train, targets_train = generate_texts(tab_path_train,\
-                                               vocab_freqs, lower)
-    docs_test, targets_test = generate_texts(tab_path_test,\
-                                             vocab_freqs, lower)
-    np.savez(os.path.join(path_to_save, "agnews_texts"), x_train=docs_train, x_test=docs_test,
-            y_train=targets_train, y_test=targets_test, 
-            vocab=np.array([item[0] for item in vocab_freqs]))
-    return path_to_save+".npz"
+    # Генерируем словарь
+    vocab_freqs = generate_vocab(
+        tab_path=tab_path_train,
+        max_vocab_size=max_vocab_size,
+        doc_count_threshold=doc_count_threshold,
+        lower=lower,
+        save_path=os.path.join(path_to_save, "agnews_words.txt")
+    )
+
+    # Читаем данные
+    docs_train, targets_train = generate_texts(tab_path_train, vocab_freqs, lower)
+    docs_test, targets_test = generate_texts(tab_path_test, vocab_freqs, lower)
+
+    # Сохраняем
+    np.savez(
+        os.path.join(path_to_save, "agnews_texts"),
+        x_train=docs_train,
+        x_test=docs_test,
+        y_train=targets_train,
+        y_test=targets_test,
+        vocab=np.array([item[0] for item in vocab_freqs])
+    )
+    return os.path.join(path_to_save, "agnews_texts.npz")
     
 def process_text_imdb(paths_train, paths_test, labels, \
                       path_to_save="./", \
