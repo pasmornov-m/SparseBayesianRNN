@@ -35,17 +35,9 @@ seed = 0
 
 train_data, valid_data, test_data = load_PTB_word(ptb_path, fnames[0], fnames[1], fnames[2])
 
-print("load_PTB_word train_data: ", train_data)
-print("load_PTB_word valid_data: ", valid_data)
-print("load_PTB_word test_data: ", test_data)
-
 train_data = PTB_word(train_data, seq_len, batch_size)
 valid_data = PTB_word(valid_data, seq_len, batch_size)
 test_data = PTB_word(test_data, seq_len, batch_size)
-
-print("PTB_word train_data: ", train_data)
-print("PTB_word valid_data: ", valid_data)
-print("PTB_word test_data: ", test_data)
 
 np.random.seed(seed)
 lm_net = LMNet(vocab_size, n_hidden, config, hid_prop, batch_size)

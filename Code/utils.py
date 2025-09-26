@@ -114,6 +114,7 @@ def train_char_lm_model(net, train_data, test_data, train_fn, val_fns, tmp_fn,
         for batch_index in range(train_data.num_batches):
             batch = train_data.get_next_batch()
             l, nor = train_fn(*batch)
+            print('batch_index: {}/{}; loss: {}'.format(batch_index, train_data.num_batches, l))
             grad_norm = max(nor, grad_norm)
             mean_grad_norm += nor
             tr_l += l * batch[0].shape[1 if hid_prop else 0]
