@@ -13,9 +13,15 @@ def save_net(net, file_name):
     print('Save model: ' + file_name)#, flush=True)
     np.save(file_name, params)
 
-def get_char_lm_functions(net, inp, target, hid_prop = False, 
-                          hid=None, to_init_lstm=None, mask=None,
-                          grad_clip=10**9, learning_rate=0.001, 
+def get_char_lm_functions(net, 
+                          inp, 
+                          target, 
+                          hid_prop = False, 
+                          hid=None, 
+                          to_init_lstm=None, 
+                          mask=None,
+                          grad_clip=10**9, 
+                          learning_rate=0.001, 
                           loss_function=categorical_crossentropy,
                           val_loss_function=categorical_crossentropy, 
                           train_size = 1, 
@@ -95,14 +101,28 @@ def evaluate(data, val_fn, hid_prop = False, reset_hid_init_fn = None, use_all =
     data.to_first_batch()
     return err
         
-def print_evaluate(data, val_fns, hid_prop = False, reset_hid_init_fn = None, use_all = True):
+def print_evaluate(data, 
+                   val_fns,
+                   hid_prop = False, 
+                   reset_hid_init_fn = None,
+                   use_all = True):
     result = '(' + ','.join(val_fns.keys()) + '): ' + \
     ', '.join(['%.4f' % evaluate(data, val_fns[fn], hid_prop, reset_hid_init_fn, use_all) for fn in val_fns.keys()])
     return result
 
-def train_char_lm_model(net, train_data, test_data, train_fn, val_fns, tmp_fn,
-                        num_epochs, hid_prop = False, reset_hid_init_fn = None,
-                        valid_data=None, print_fq = 1, save_fq = 0, file_name = "models/",\
+def train_char_lm_model(net, 
+                        train_data,
+                        test_data, 
+                        train_fn, 
+                        val_fns, 
+                        tmp_fn,
+                        num_epochs,
+                        hid_prop = False, 
+                        reset_hid_init_fn = None,
+                        valid_data=None,
+                        print_fq = 1, 
+                        save_fq = 0, 
+                        file_name = "models/",
                         sparsification_eval_fun=None):
     print("Training ...")
     for epoch in range(1, num_epochs+1):
