@@ -51,9 +51,15 @@ train_fn, val_fns, tmp_fn = get_char_lm_functions(net, inp, target,
                                           loss_function=lml.cross_entropy, val_loss_function=lml.norm_cross_entropy)
 
 np.random.seed(seed)
-net = train_char_lm_model(net, train_data, test_data, train_fn, val_fns, 
-                          num_epoches, valid_data = valid_data,
-                          print_fq = print_fq, save_fq = save_fq, 
+net = train_char_lm_model(net, 
+                          train_data, 
+                          test_data, 
+                          train_fn, 
+                          val_fns, 
+                          num_epochs=num_epoches, 
+                          valid_data = valid_data,
+                          print_fq = print_fq, 
+                          save_fq = save_fq, 
                           file_name = file_name,
                           sparsification_eval_fun=lm_net.evaluate_compression)
 

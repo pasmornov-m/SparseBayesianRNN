@@ -958,10 +958,23 @@ class LMNet(nn.Module):
         use_hid_init: если True и hid_prop=True — использовать self.hid как hid_init
         Возвращает: распределения (batch*seq_len, vocab_size) или (batch, seq_len, vocab_size) в зависимости от нужд.
         """
-        
         if self.hid_prop:
             b = inp.size(0)
-            hid_init = self.hid_next[:, :b, :].clone() if hasattr(self, 'hid_next') else self.hid[:, :b, :].clone()
+            num_layers = 2
+
+            if hasattr(self, "hid_next") and self.hid_next is not None:
+                if self.hid_next.size(1) != b:
+                    if self.hid_next.size(1) > b:
+                        hid_next = self.hid_next[:, :b, :].clone()
+                    else:
+                        pad = torch.zeros((self.hid_next.size(0), b - self.hid_next.size(1), self.n_hidden), dtype=self.hid_next.dtype)
+                        hid_next = torch.cat([self.hid_next, pad], dim=1)
+                else:
+                    hid_next = self.hid_next
+                hid_init = hid_next.clone()
+            else:
+                hid_init = torch.zeros((num_layers, b, self.n_hidden))
+
             lstm_out = self.lstm(inp, hid_init=hid_init)
             last_hidden = lstm_out[:, :, -1, :].detach()
             self.hid_next = last_hidden.clone()

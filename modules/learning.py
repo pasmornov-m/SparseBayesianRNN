@@ -41,6 +41,7 @@ class LMTrainer():
         with torch.no_grad():
             for xb, yb in loader:
                 logits = self.model(xb)
+                yb = torch.remainder(yb, logits.size(-1))
                 base_loss = self.criterion(logits.view(-1, logits.size(-1)), yb.view(-1))
                 reg = self.get_reg()
                 loss = base_loss + reg
@@ -68,6 +69,7 @@ class LMTrainer():
 
                 self.optimizer.zero_grad()           
                 logits = self.model(xb)
+                yb = torch.remainder(yb, logits.size(-1))
                 base_loss = self.criterion(logits.view(-1, logits.size(-1)), yb.view(-1))
                 reg = self.get_reg()
                 loss = base_loss + reg

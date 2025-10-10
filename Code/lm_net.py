@@ -19,7 +19,7 @@ class LMNet:
         self.config = config
         net = ll.InputLayer(shape=(None, None, vocab_size), input_var=inp_one_hot)
         if hid_prop:
-            hid = theano.shared(np.zeros((2,32, n_hidden), dtype=theano.config.floatX))#!!!!!!!!!! batch size 32
+            hid = theano.shared(np.zeros((2, batch_size, n_hidden), dtype=theano.config.floatX))#!!!!!!!!!! batch size 32
             hid_init = ll.InputLayer(shape=(2,None, n_hidden), name='hid_init',input_var=hid)
         self.lstm_layer = BayesianLSTM([net,hid_init] if hid_prop else net, n_hidden, only_return_final=False, learn_init=False, hid_prop = hid_prop,\
                                        config=config[:3], \
