@@ -25,9 +25,10 @@ args = sys.argv[1:]
 config = args[0]
 
 np.random.seed(0)
-(X_train, y_train, mask_train), (X_test, y_test, mask_test) = data_utils.load_matrix("agnews_texts.npz",\
-                                                        num_words=vocab_size,
-                                                       maxlen=maxlen, mask=True)
+(X_train, y_train, mask_train), (X_test, y_test, mask_test) = data_utils.load_matrix("agnews_texts.npz",
+                                                                                     num_words=vocab_size,
+                                                                                     maxlen=maxlen, 
+                                                                                     mask=True)
 y_train -= 1
 y_test -= 1
 X_val, y_val, mask_val = X_train[int(0.95*len(X_train)):], \
@@ -41,9 +42,12 @@ file_name = "Results/weights_%s"%config
 
 test_types = ["clip"]
 
-train_data = data_utils.Reviews(X_train, y_train, batch_size, \
-                                        mask=mask_train,
-                                        shuffle=True)
+train_data = data_utils.Reviews(X_train, 
+                                y_train, 
+                                batch_size,
+                                mask=mask_train,
+                                shuffle=True)
+
 val_data = data_utils.Reviews(X_val, y_val, batch_size, mask=mask_val)
 test_data = data_utils.Reviews(X_test, y_test, batch_size, mask=mask_test)
 
@@ -66,18 +70,29 @@ ll.set_all_param_values(net, params)
 
 def accuracy(prediction, target):
     return T.eq(T.argmax(prediction, axis=1), target).mean()
-train_fn, val_fns, tmp_fn = utils.get_char_lm_functions(net, inp,
-                                          target, mask=mask,
-                                          learning_rate=learning_rate, 
-                                          train_size=train_data.num_examples,\
-                                          test_types=test_types, \
-                                          loss_function=lambda a, b:\
-                                          categorical_crossentropy(T.clip(a, 1.0e-6, 1.0 - 1.0e-6), b).mean(),
-                                          val_loss_function=accuracy)
 
-net = utils.train_char_lm_model(net, train_data, test_data, \
-                                        train_fn, val_fns, 
-                          num_epoches, valid_data=val_data,
-                          print_fq = 5, save_fq = save_fq, file_name=file_name,\
-                          sparsification_eval_fun=class_net.evaluate_compression)
+train_fn, val_fns, tmp_fn = utils.get_char_lm_functions(net, 
+                                                        inp,
+                                                        target, 
+                                                        mask=mask,
+                                                        learning_rate=learning_rate, 
+                                                        train_size=train_data.num_examples,
+                                                        test_types=test_types,
+                                                        loss_function=lambda a, b: categorical_crossentropy(
+                                                            T.clip(a, 1.0e-6, 1.0 - 1.0e-6), b
+                                                        ).mean(),
+                                                        val_loss_function=accuracy)
+
+net = utils.train_char_lm_model(net, 
+                                train_data, 
+                                test_data,
+                                train_fn, 
+                                val_fns, 
+                                num_epoches, 
+                                valid_data=val_data,
+                                print_fq = 5, 
+                                save_fq = save_fq, 
+                                file_name=file_name,
+                                sparsification_eval_fun=class_net.evaluate_compression)
+
 utils.save_net(net, file_name+".npy")

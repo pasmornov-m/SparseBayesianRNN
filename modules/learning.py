@@ -7,8 +7,9 @@ class LMTrainer():
                  model,
                  optimizer,
                  criterion,
-                 num_epochs,
-                 train_loader,
+                 val_criterion=None,
+                 num_epochs=100,
+                 train_loader=None,
                  valid_loader=None,
                  test_loader=None,
                  grad_clip=10.0,
@@ -23,6 +24,7 @@ class LMTrainer():
         self.test_loader = test_loader
         self.optimizer = optimizer
         self.criterion = criterion
+        self.val_criterion = val_criterion if val_criterion else criterion
         self.num_epochs = num_epochs
         self.grad_clip = grad_clip
         self.print_fq = print_fq
@@ -34,15 +36,16 @@ class LMTrainer():
         self.train_size = train_loader.train_size()
         self.num_batches = len(train_loader)
         
-    def evaluate(self, loader):
+    def evaluate(self, loader, criterion):
         self.model.eval()
         loss_sum = 0.0
         tokens = 0
         with torch.no_grad():
-            for xb, yb in loader:
+            for batch in self.train_loader:
+                xb, yb, *rest = batch
+                mask = rest[0] if rest else None
                 logits = self.model(xb)
-                yb = torch.remainder(yb, logits.size(-1))
-                base_loss = self.criterion(logits.view(-1, logits.size(-1)), yb.view(-1))
+                base_loss = criterion(logits, yb)
                 reg = self.get_reg()
                 loss = base_loss + reg
                 loss_sum += loss.item() * yb.numel()
@@ -65,8 +68,9 @@ class LMTrainer():
             total_tokens = 0
             grad_norm = 0.0
 
-            for batch_idx, (xb, yb) in enumerate(self.train_loader):
-
+            for batch_idx, batch in enumerate(self.train_loader):
+                xb, yb, *rest = batch   # rest = [] или [mask]
+                mask = rest[0] if rest else None
                 self.optimizer.zero_grad()           
                 logits = self.model(xb)
                 yb = torch.remainder(yb, logits.size(-1))
@@ -89,7 +93,7 @@ class LMTrainer():
                 if (batch_idx % self.log_interval == 0) or (batch_idx == self.num_batches - 1):
                     print(
                         f"epoch {epoch:04d}/{self.num_epochs} | batch {batch_idx:04d}/{self.num_batches} | "
-                        f"CE {base_loss.item():.4f} | total_loss {loss_item:.4f} | tokens {n_tokens} "
+                        f"base_loss {base_loss.item():.4f} | total_loss {loss_item:.4f} | tokens {n_tokens} "
                     )
 
             avg_train_loss = total_loss_weighted / total_tokens if total_tokens > 0 else float("nan")
@@ -103,8 +107,8 @@ class LMTrainer():
     def print_epoch_metrics(self, epoch, epoch_time, train_loss, grad_norm):
         do_print = (epoch % self.print_fq == 0) or (epoch == self.num_epochs)
         if do_print:
-            val_loss = self.evaluate(self.valid_loader) if self.valid_loader is not None else None
-            test_loss = self.evaluate(self.test_loader) if self.test_loader is not None else None
+            val_loss = self.evaluate(self.valid_loader, self.val_criterion) if self.valid_loader is not None else None
+            test_loss = self.evaluate(self.test_loader, self.val_criterion) if self.test_loader is not None else None
 
             val_str = f"{val_loss:.4f}" if val_loss is not None else "n/a"
             test_str = f"{test_loss:.4f}" if test_loss is not None else "n/a"

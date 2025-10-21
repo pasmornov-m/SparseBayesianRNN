@@ -501,8 +501,8 @@ class BayesianLSTM(LSTM):
             log_alpha_w_hid = 2 * self.logsig_w_hid - 2 * utils.safe_torch_log(torch.abs(W_hid))
             mask_w_hid = log_alpha_w_hid < self.thresh
         else:
-            mask_w_in = torch.ones((4,) + self.W_in_to_ingate.shape, dtype=torch.bool, device=self.W_in_to_ingate.device)
-            mask_w_hid = torch.ones((4,) + self.W_hid_to_ingate.shape, dtype=torch.bool, device=self.W_hid_to_ingate.device)
+            mask_w_in = torch.ones((4,) + self.W_in_to_ingate.shape, dtype=torch.bool)
+            mask_w_hid = torch.ones((4,) + self.W_hid_to_ingate.shape, dtype=torch.bool)
 
         # --- neurons ---
         mask_in = mask_w_in.any(dim=2).any(dim=0)
@@ -634,9 +634,9 @@ class BayesianLSTM(LSTM):
             hid = hid_init[0].to(dtype=self.dtype)
             cell = hid_init[1].to(dtype=self.dtype)
         else:
-            hid = None
-            cell = None
-        
+            hid = torch.zeros(num_batch, self.num_units, dtype=self.dtype)
+            cell = torch.zeros(num_batch, self.num_units, dtype=self.dtype)
+                
         hn = self.hidden_noise if self.hidden_noise is not None else torch.ones(1, dtype=self.dtype)
         hc = self.hidden_clip if self.hidden_clip is not None else torch.ones(1, dtype=self.dtype)
         hn_hc = hn * hc
@@ -776,7 +776,7 @@ class BayesianDense(Dense):
 
         if deterministic:
             return input @ W_eff
-
+        
         mu = input @ W_eff
         si = torch.sqrt((input * input) @ sigma2 + 1e-8)
 
@@ -881,10 +881,6 @@ class BayesianDense_noLRT(Dense):
         return reg
     
     def get_ard(self) -> dict[str, torch.Tensor]:
-        """
-        Возвращаем torch-маску (bool tensor).
-        Маска не требует градиентов и используется для sparsification.
-        """
         W = self.W.detach()
         log_sigma = self.log_sigma.detach()
         log_alpha = 2 * log_sigma - 2 * utils.safe_torch_log(torch.abs(W))
@@ -892,16 +888,194 @@ class BayesianDense_noLRT(Dense):
         return {"w": mask}
     
     def forward(self, input: torch.Tensor, deterministic: bool = None, clip: bool = False) -> torch.Tensor:
-        """
-        input: tensor with last dim == num_inputs, can be 2D (batch, in) or 3D (batch, seq_len, in)
-        deterministic: if None -> deterministic = not self.training (eval mode); else use explicit value
-        clip: whether to apply clipping logic inside pre_activation
-        """
         if deterministic is None:
             deterministic = not self.training
         out = self.pre_activation(input, deterministic=deterministic, clip=clip)
         out = out + self.b
         return self.nonlinearity(out)
+
+
+class Embedding(nn.Module):
+    def __init__(self, input_size, output_size):
+        super().__init__()
+        self.input_size = input_size
+        self.output_size = output_size        
+        self.W = nn.Parameter(torch.empty(input_size, output_size))
+        nn.init.uniform_(self.W, -0.05, 0.05)
+
+    def get_output_shape_for(self, input_shape):
+        return input_shape + (self.output_size, )
+
+    def forward(self, x):
+        return nn.functional.embedding(x, self.W)
+
+
+class BayesianEmbedding(Embedding):
+    def __init__(self, input_size, output_size, log_sigma_init=-3.0, config="DC", thresh=3, padding_idx=0):
+        super().__init__(input_size, output_size)
+        self.config = config
+        self.thresh = thresh
+
+        # optional log_sigma_w per weight element
+        if self.config[0] in {"L", "N"}:
+            self.log_sigma_w = nn.Parameter(torch.full((self.input_size, self.output_size),
+                                                    float(log_sigma_init)))
+        else:
+            self.register_parameter("log_sigma_w", None)
+
+        # optional input-level parameters per vocabulary entry (mu_in and log_sigma_in)
+        if self.config[1] in {"L", "N"}:
+            self.mu_in = nn.Parameter(torch.ones(self.input_size))
+            self.log_sigma_in = nn.Parameter(torch.full((self.input_size,), float(log_sigma_init)))
+        else:
+            self.register_parameter("mu_in", None)
+            self.register_parameter("log_sigma_in", None)
+
+        self._w_noise = None
+        self._w_clip = None
+        self._in_clip = None
+
+    def generate_noise_and_clip(self, batch_size: int, deterministic: bool = False, clip: bool = False):
+
+        if not deterministic:
+            # weight noise
+            if self.config[0] in {"L", "N"}:
+                self._w_noise = torch.randn_like(self.W) * torch.exp(self.log_sigma_w)
+            else:  # "D"
+                self._w_noise = torch.zeros((1,))
+
+            # input noise
+            if self.config[1] in {"L", "N"}:
+                eps = torch.randn((batch_size, self.input_size))
+                self._in_noise = eps * torch.exp(self.log_sigma_in) + self.mu_in
+            else:  # "C"
+                self._in_noise = torch.ones((1,))
+        else:
+            # deterministic: no sampling
+            self._w_noise = torch.zeros((1,))
+            if self.config[1] in {"L", "N"}:
+                self._in_noise = self.mu_in
+            else:
+                self._in_noise = torch.ones((1,))
+
+        # === CLIP ===
+        if clip:
+            if self.config[0] == "L":
+                log_alpha_w = 2.0 * self.log_sigma_w - utils.safe_torch_log(self.W ** 2)
+                log_alpha_w_clip = utils.clip_func(log_alpha_w)
+                self._w_clip = (log_alpha_w_clip <= self.thresh).float()
+            else:
+                self._w_clip = torch.ones_like(self.W)
+
+            # input clipping
+            if self.config[1] == "L":
+                log_alpha_in = 2.0 * self.log_sigma_in - utils.safe_torch_log(self.mu_in ** 2)
+                log_alpha_in_clip = utils.clip_func(log_alpha_in)
+                self._in_clip = (log_alpha_in_clip <= self.thresh).float()
+            else:
+                self._in_clip = torch.ones((self.input_size,))
+        else:
+            self._w_clip = torch.ones_like(self.W)
+            self._in_clip = torch.ones((self.input_size,))
+
+
+    def forward(self, input: torch.LongTensor, deterministic: bool = False, clip: bool = False):
+        """
+        input_ids: LongTensor (batch, seq_len)
+        deterministic: if True, do not sample noise (use mu / zeros)
+        clip: if True, compute clipping masks and apply them
+        """
+        batch_size, seq_len = input.shape
+
+        self.generate_noise_and_clip(batch_size, deterministic=deterministic, clip=clip)
+
+        W_eff = (self.W + self._w_noise) * self._w_clip
+
+        emb = nn.functional.embedding(input, W_eff)
+
+        if (not deterministic) and (self.config[1] in {"L", "N"}):
+            mu_tokens = self.mu_in[input]
+            sigma_tokens = torch.exp(self.log_sigma_in[input])
+            eps = torch.randn_like(mu_tokens)
+            in_noise_tokens = mu_tokens + eps * sigma_tokens
+            in_clip_tokens = self._in_clip[input]
+            in_scale = in_noise_tokens * in_clip_tokens
+            out = emb * in_scale.unsqueeze(-1)
+            return out
+
+        else:
+            if self.config[1] in {"L", "N"}:
+                mu = self.mu_in
+                mu_tokens = mu[input]
+                in_clip_tokens = self._in_clip[input]
+                in_scale = mu_tokens * in_clip_tokens
+                return emb * in_scale.unsqueeze(-1)
+            else:
+                return emb
+
+    def eval_reg(self, train_size: int):
+        """
+        Return KL regularizer as torch scalar divided by train_size.
+        For 'N' config we compute closed-form KL for Normal approximate posterior with std parameters.
+        For 'L' config the original code uses alpha_regf (non-trivial function). Here we approximate
+        by 0 for 'L' or you can plug your own implementation.
+        """
+        KL = 0.0
+        
+        if self.config[0] == "L":
+            log_alpha_w = 2  *self.log_sigma_w - utils.safe_torch_log(self.W**2)
+            log_alpha_w_clip = utils.clip_func(log_alpha_w)
+            KL += utils.alpha_regf(log_alpha_w_clip).sum()
+        elif self.config[0] == "N":
+            KL_w = (-self.log_sigma_w + 0.5 * (torch.exp(2.0 * self.log_sigma_w) + self.W ** 2) - 0.5).sum()
+            KL += KL_w
+
+        if self.config[1] == "L":
+            log_alpha_in = 2 * self.log_sigma_in - utils.safe_torch_log(self.W**2)
+            log_alpha_in_clip = utils.clip_func(log_alpha_in)
+            KL += utils.alpha_regf(log_alpha_in_clip).sum()
+        elif self.config[1] == "N":
+            KL_in = (-self.log_sigma_in + 0.5 * (torch.exp(2.0 * self.log_sigma_in) + self.mu_in ** 2) - 0.5).sum()
+            KL += KL_in
+
+        return KL / float(train_size)
+
+    def get_ard(self, thresh: float = None):
+        if thresh is None:
+            thresh = self.thresh
+
+        if self.config[0] == "L":
+            log_alpha_w = 2*self.log_sigma_w-utils.safe_torch_log(self.W**2)
+            mask_w = log_alpha_w < self.thresh
+        else:
+            mask_w = torch.ones_like(self.W)
+        if self.config[1] == "L":
+            log_alpha_in = 2*self.log_sigma_in-utils.safe_torch_log(self.mu_in**2)
+            mask_in = log_alpha_in < self.thresh
+        else:
+            mask_in = mask_w.any(axis=1)
+        mask_out = mask_w.any(axis=0)
+        return {"w": mask_w, "z_voc":mask_in, "z_emb":mask_out}
+
+    def get_reg(self):
+        KL_w = 0.0
+        KL_in = 0.0
+
+        if self.config[0] == "L":
+            log_alpha_w = 2 * self.log_sigma_w - utils.safe_torch_log(self.W**2)
+            KL_w = utils.alpha_regf(log_alpha_w).sum()
+        elif self.config[0] == "N":
+            KL_element_w = -self.log_sigma_w + 0.5 * (torch.exp(2 * self.log_sigma_w) + self.W ** 2) - 0.5
+            KL_w = torch.sum(KL_element_w)
+
+        if self.config[1] == "L":
+            log_alpha_in = 2 * self.log_sigma_in - utils.safe_torch_log(self.mu_in**2)
+            KL_in = utils.alpha_regf(log_alpha_in).sum()
+        elif self.config[1] == "N":
+            KL_element_in = -self.log_sigma_in + 0.5 * (torch.exp(2 * self.log_sigma_in) + self.mu_in ** 2) - 0.5
+            KL_in = torch.sum(KL_element_in)
+
+        return f"{KL_w:.4f}, {KL_in:.4f}"
 
 
 class LMNet(nn.Module):
@@ -918,8 +1092,6 @@ class LMNet(nn.Module):
         n_hidden: размер скрытого состояния LSTM
         config: строка конфигурации (как в оригинале)
         hid_prop: если True — предусмотрена возможность прокинуть hid_init
-        batch_size: использовался в оригинале при создании shared hid (32)
-        device: 'cpu' или 'cuda'
         """
         super().__init__()
         self.vocab_size = int(vocab_size)
@@ -980,7 +1152,6 @@ class LMNet(nn.Module):
             self.hid_next = last_hidden.clone()
         else:
             lstm_out = self.lstm(inp)
-
         hid_out = lstm_out[0]
         logits = self.dense(hid_out)
             
@@ -988,27 +1159,26 @@ class LMNet(nn.Module):
 
     def compute_compression_masks(self):
         """
-        Возвращает маски компрессии в виде torch.Tensor (на device модели).
+        Возвращает маски компрессии в виде torch.Tensor.
         Маски отвязаны от графа вычислений (detach).
         """
-        device = next(self.parameters()).device
 
         masks_lstm = self.lstm.get_ard()
         masks_dense = self.dense.get_ard()
 
-        mask_vocabulary = masks_lstm["z_input"].to(dtype=torch.bool, device=device)
+        mask_vocabulary = masks_lstm["z_input"].to(dtype=torch.bool)
 
         mask_hidden = torch.logical_or(
             masks_lstm["z_hidden_by_w"],
             masks_dense["w"].any(dim=1)
         )
         mask_hidden = torch.logical_and(mask_hidden, masks_lstm["z_hidden"])
-        mask_hidden = mask_hidden.to(dtype=torch.bool, device=device)
+        mask_hidden = mask_hidden.to(dtype=torch.bool)
 
-        w_in = masks_lstm["w_input"].clone().to(device)
-        w_hid = masks_lstm["w_hidden"].clone().to(device)
-        w_dense = masks_dense["w"].clone().to(device)
-        gates = masks_lstm["gates"].clone().to(device)
+        w_in = masks_lstm["w_input"].clone()
+        w_hid = masks_lstm["w_hidden"].clone()
+        w_dense = masks_dense["w"].clone()
+        gates = masks_lstm["gates"].clone()
 
         w_in[:, ~mask_vocabulary, :] = 0
         w_in[:, :, ~mask_hidden] = 0
@@ -1036,3 +1206,198 @@ class LMNet(nn.Module):
             print()
         print(f"Overall compression: {overall_compression:.3f}")
         return overall_compression
+
+
+class ClassificationNet(nn.Module):
+    def __init__(self, vocab_size: int, n_emb: int, n_hidden: int, num_classes: int, config: str):
+        super().__init__()
+        self.config = config
+        self.n_hidden = n_hidden
+        self.num_classes = num_classes
+
+        self.emb_layer = BayesianEmbedding(
+            input_size=vocab_size,
+            output_size=n_emb,
+            config=config[:2]
+        )
+
+        self.lstm_layer = BayesianLSTM(
+            incoming=n_emb,
+            num_units=n_hidden,
+            only_return_final=False,
+            learn_init=False,
+            config=config[2:5]
+        )
+
+        DenseClass = BayesianDense if config[-1] == "L" else Dense
+        self.dense = DenseClass(
+            incoming=n_hidden,
+            num_units=num_classes,
+            nonlinearity=torch.sigmoid if num_classes == 1 else nn.functional.softmax
+        )
+
+    def forward(self, x: torch.LongTensor, deterministic: bool = False, clip: bool = False):
+        """
+        x: (batch, seq_len)
+        """
+        emb = self.emb_layer(x, deterministic=deterministic, clip=clip)
+        out = self.lstm_layer(emb, deterministic=deterministic, clip=clip)
+        out = out[:, -1, :]
+        logits = self.dense(out, deterministic=deterministic, clip=clip)
+        return logits
+
+    # === Compression mask utilities ===
+    def compute_compression_masks(self):
+        masks_embedding = self.emb_layer.get_ard()
+        masks_lstm = self.lstm_layer.get_ard()
+        masks_dense = self.dense.get_ard()
+
+        mask_vocabulary = masks_embedding["z_voc"]
+        mask_emb = torch.logical_and(
+            masks_embedding["z_emb"].to(torch.bool),
+            masks_lstm["z_input"].to(torch.bool)
+        )
+        mask_hidden = torch.logical_or(
+            masks_lstm["z_hidden_by_w"].to(torch.bool),
+            masks_dense["w"].any(dim=1).to(torch.bool)
+        )
+
+        mask_hidden = torch.logical_and(mask_hidden, masks_lstm["z_hidden"].to(torch.bool))
+
+        masks_embedding["w"][~mask_vocabulary] = 0
+        masks_embedding["w"][:, ~mask_emb] = 0
+        masks_lstm["w_input"][:, ~mask_emb, :] = 0
+        masks_lstm["w_input"][:, :, ~mask_hidden] = 0
+        masks_lstm["w_hidden"][:, ~mask_hidden, :] = 0
+        masks_lstm["w_hidden"][:, :, ~mask_hidden] = 0
+        masks_dense["w"][~mask_hidden] = 0
+        masks_lstm["gates"][:, ~mask_hidden] = 0
+
+        return (
+            mask_vocabulary,
+            mask_emb,
+            mask_hidden,
+            masks_lstm["gates"],
+            masks_embedding["w"],
+            masks_lstm["w_input"],
+            masks_lstm["w_hidden"],
+            masks_dense["w"],
+        )
+
+    def evaluate_compression(self):
+        (
+            mask_vocabulary,
+            mask_emb,
+            mask_hidden,
+            mask_gates,
+            mask_w_emb,
+            mask_w_inp,
+            mask_w_hid,
+            mask_w_dense,
+        ) = self.compute_compression_masks()
+
+        w_nonzero, w_all = 0, 0
+        for w in [mask_w_emb, mask_w_inp, mask_w_hid, mask_w_dense]:
+            w_nonzero += w.sum().item()
+            w_all += w.numel()
+        overall_compression = w_all / (w_nonzero + 1e-8)
+
+        print("Compression per layers:")
+        for layer_name, masks in [
+            ("Embedding", {"w": mask_w_emb, "z_voc": mask_vocabulary}),
+            ("LSTM", {"w_x": mask_w_inp, "w_h": mask_w_hid,
+                      "z_x": mask_emb, "z_h": mask_hidden, "gates": mask_gates}),
+            ("Dense", {"w": mask_w_dense}),
+        ]:
+            print(layer_name, end=": ")
+            for key, matrix in masks.items():
+                print(f"({key}: {matrix.sum().item()}/{matrix.numel()})", end=" ")
+            print()
+        print(f"Overall compression: {overall_compression:.3f}")
+
+    def compress(self):
+        """
+        Выполняет сжатие параметров сети, применяя байесовские маски
+        к весам Embedding, LSTM и Dense слоёв.
+        """
+        (
+            mask_vocabulary, mask_emb, mask_hidden, mask_gates,
+            mask_w_emb, mask_w_inp, mask_w_hid, mask_w_dense
+        ) = self.compute_compression_masks()
+
+        inv = lambda x: torch.logical_not(torch.as_tensor(x))
+        new_params = []
+
+        params = [p.detach().clone() for p in self.parameters()]
+        i = 0
+
+        # === EMBEDDING ===
+        W = params[0]
+        if self.config[0] == "L":
+            W[inv(mask_w_emb)] = 0
+            i += 1
+        if self.config[1] == "L":
+            W *= params[i+1][:, None]
+            i += 2
+
+        W[inv(mask_vocabulary)] = 0
+        W = W[:, mask_emb]
+        new_params.append(W)
+
+        # === LSTM ===
+        k1 = 2 if self.config[2] == "L" else 0
+        k2 = 4 if self.config[4] == "L" else 0
+
+        for j in range(4):  # 4 гейта
+            # ---- W^x ----
+            Wx = params[i + 1 + j * 3]
+            if self.config[2] == "L":
+                Wx[inv(mask_w_inp[j])] = 0
+            if self.config[3] == "L":
+                Wx *= params[i + k1 + k2 + 15][j][None, :]
+                Wx[:, inv(mask_gates[j])] = 0
+            if self.config[4] == "L":
+                Wx *= params[i + k1 + 15][:, None]
+            Wx = Wx[mask_emb][:, mask_hidden]
+            new_params.append(Wx)
+
+            # ---- W^h ----
+            Wh = params[i + 2 + j * 3]
+            if self.config[2] == "L":
+                Wh[inv(mask_w_hid[j])] = 0
+            if self.config[3] == "L":
+                Wh *= params[i + k1 + k2 + 15][j][None, :]
+                Wh[:, inv(mask_gates[j])] = 0
+            if self.config[4] == "L":
+                Wh *= params[i + k1 + 17][:, None]
+            Wh = Wh[mask_hidden][:, mask_hidden]
+            new_params.append(Wh)
+
+            # ---- b ----
+            b = params[i + 3 + j * 3]
+            b = b[mask_hidden]
+            new_params.append(b)
+
+        new_params.append(params[i + 13][:, mask_hidden])
+        new_params.append(params[i + 14][:, mask_hidden])
+
+        # === DENSE ===
+        j = i + k1 + k2 + (2 if self.config[3] == "L" else 0) + 14
+        W_dense = params[j + 1]
+        if self.config[5] == "L":
+            W_dense[inv(mask_w_dense)] = 0
+            j += 1
+        if self.config[4] == "L":
+            W_dense *= params[i + k1 + 17][:, None]
+        W_dense = W_dense[mask_hidden]
+        new_params.append(W_dense)
+
+        b_dense = params[j + 1]
+        new_params.append(b_dense)
+
+        compression_stats = (
+            int(mask_vocabulary.sum()),
+            int(mask_emb.sum()),
+            int(mask_hidden.sum())
+        )
+        return new_params, compression_stats
