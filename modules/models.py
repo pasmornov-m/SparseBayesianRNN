@@ -647,13 +647,6 @@ class BayesianLSTM(LSTM):
             hidden_w_clip = self.hidden_w_clip.repeat_interleave(self.num_units)
             hid_preact = hid_preact * hidden_w_clip
             hid_preact_i, hid_preact_f, hid_preact_c, hid_preact_o = torch.chunk(hid_preact, 4, dim=1)
-            
-            # hid_preact_i, hid_preact_f, hid_preact_c, hid_preact_o = torch.chunk(hid_preact, 4, dim=1)
-
-            # hid_preact_i = hid_preact_i * self.hidden_w_clip[0]
-            # hid_preact_f = hid_preact_f * self.hidden_w_clip[1]
-            # hid_preact_c = hid_preact_c * self.hidden_w_clip[2]
-            # hid_preact_o = hid_preact_o * self.hidden_w_clip[3]
 
             ingate = self.nonlinearity_ingate((input_n_i + hid_preact_i) * g0_gc0 + self.b_ingate)
             forgetgate = self.nonlinearity_forgetgate((input_n_f + hid_preact_f) * g1_gc1 + self.b_forgetgate)
