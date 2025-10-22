@@ -41,7 +41,7 @@ class LMTrainer():
         loss_sum = 0.0
         tokens = 0
         with torch.no_grad():
-            for batch in self.train_loader:
+            for batch in loader:
                 xb, yb, *rest = batch
                 mask = rest[0] if rest else None
                 logits = self.model(xb)

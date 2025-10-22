@@ -305,7 +305,6 @@ class BayesianLSTM(LSTM):
     
     def generate_noise_and_clip(self, num_batch, deterministic=False, clip=False):
         if not deterministic:
-            # --- W_in, W_hid noise ---
             if self.config[0] in {"L", "N"}:
                 self.input_w_noise = torch.randn(4, self.num_inputs, self.num_units) * torch.exp(self.logsig_w_in)
                 self.hidden_w_noise = torch.randn(4, self.num_units, self.num_units) * torch.exp(self.logsig_w_hid)
@@ -313,7 +312,6 @@ class BayesianLSTM(LSTM):
                 self.input_w_noise = torch.zeros(4)
                 self.hidden_w_noise = torch.zeros(4)
 
-            # --- input/hidden noise ---
             if self.config[2] in {"L", "N"}:
                 self.input_noise = torch.randn(num_batch, self.num_inputs) * torch.exp(self.logsig_in) + self.mu_in
                 self.hidden_noise = torch.randn(num_batch, self.num_units) * torch.exp(self.logsig_hid) + self.mu_hid
@@ -330,7 +328,6 @@ class BayesianLSTM(LSTM):
                 self.input_noise = torch.ones(1)
                 self.hidden_noise = torch.ones(1)
         
-            # --- gates noise ---
             if self.config[1] in {"L", "N"}:
                 self.gates_noise = torch.randn(4, num_batch, self.num_units) * torch.exp(self.logsig_gates)[:, None, :] + self.mu_gates[:, None, :]
             elif self.config[1] == "D":
@@ -366,38 +363,38 @@ class BayesianLSTM(LSTM):
                                     self.W_in_to_forgetgate[None,:,:],
                                     self.W_in_to_cell[None,:,:],
                                     self.W_in_to_outgate[None,:,:]], dim=0)
-                log_alpha_w_in = utils.clip_func(2*self.logsig_w_in - torch.log(W_in_cat**2 + self.epsilon))
+                log_alpha_w_in = utils.clip_func(2 * self.logsig_w_in - torch.log(W_in_cat**2 + self.epsilon))
                 self.input_w_clip = log_alpha_w_in <= self.thresh
 
                 W_hid_cat = torch.cat([self.W_hid_to_ingate[None,:,:],
                                     self.W_hid_to_forgetgate[None,:,:],
                                     self.W_hid_to_cell[None,:,:],
                                     self.W_hid_to_outgate[None,:,:]], dim=0)
-                log_alpha_w_hid = utils.clip_func(2*self.logsig_w_hid - utils.safe_torch_log(W_hid_cat**2))
+                log_alpha_w_hid = utils.clip_func(2 * self.logsig_w_hid - utils.safe_torch_log(W_hid_cat**2))
                 self.hidden_w_clip = log_alpha_w_hid <= self.thresh
             else:
                 self.input_w_clip = torch.ones(4)
                 self.hidden_w_clip = torch.ones(4)
 
             if self.config[2] == "L":
-                log_alpha_in = utils.clip_func(2*self.logsig_in - utils.safe_torch_log(self.mu_in**2))
+                log_alpha_in = utils.clip_func(2 * self.logsig_in - utils.safe_torch_log(self.mu_in**2))
                 self.input_clip = log_alpha_in <= self.thresh
-                log_alpha_hid = utils.clip_func(2*self.logsig_hid - utils.safe_torch_log(self.mu_hid**2))
+                log_alpha_hid = utils.clip_func(2 * self.logsig_hid - utils.safe_torch_log(self.mu_hid**2))
                 self.hidden_clip = log_alpha_hid <= self.thresh
             elif self.config[2] == "I":
-                log_alpha_in = utils.clip_func(2*self.logsig_in - utils.safe_torch_log(self.mu_in**2))
+                log_alpha_in = utils.clip_func(2 * self.logsig_in - utils.safe_torch_log(self.mu_in**2))
                 self.input_clip = log_alpha_in <= self.thresh
                 self.hidden_clip = torch.ones(1)
             elif self.config[2] == "R":
                 self.input_clip = torch.ones(1)
-                log_alpha_hid = utils.clip_func(2*self.logsig_hid - utils.safe_torch_log(self.mu_hid**2))
+                log_alpha_hid = utils.clip_func(2 * self.logsig_hid - utils.safe_torch_log(self.mu_hid**2))
                 self.hidden_clip = log_alpha_hid <= self.thresh
             else:
                 self.input_clip = torch.ones(1)
                 self.hidden_clip = torch.ones(1)
 
             if self.config[1] == "L":
-                log_alpha_gates = utils.clip_func(2*self.logsig_gates - utils.safe_torch_log(self.mu_gates**2))
+                log_alpha_gates = utils.clip_func(2 * self.logsig_gates - utils.safe_torch_log(self.mu_gates**2))
                 self.gates_clip = log_alpha_gates <= self.thresh
             else:
                 self.gates_clip = torch.ones(4)
@@ -442,7 +439,6 @@ class BayesianLSTM(LSTM):
         else:
             KL = torch.zeros(1, dtype=self.dtype, device=self.logsig_w_in.device).sum()
 
-        # Скрытые веса
         W_hid = torch.cat([
             self.W_hid_to_ingate.unsqueeze(0),
             self.W_hid_to_forgetgate.unsqueeze(0),
@@ -457,7 +453,6 @@ class BayesianLSTM(LSTM):
             log_alpha_w_hid = utils.clip_func(2 * self.logsig_w_hid - utils.safe_torch_log(W_hid**2))
             KL += utils.alpha_regf(log_alpha_w_hid).sum()
 
-        # Нейроны
         if self.config[2] in {"L", "R", "I"}:
             if self.config[2] in {"L", "R"}:
                 log_alpha_hid = utils.clip_func(2 * self.logsig_hid - utils.safe_torch_log(self.mu_hid**2))
@@ -469,7 +464,6 @@ class BayesianLSTM(LSTM):
             KL += (-self.logsig_hid + 0.5 * (torch.exp(2 * self.logsig_hid) + self.mu_hid**2) - 0.5).sum()
             KL += (-self.logsig_in + 0.5 * (torch.exp(2 * self.logsig_in) + self.mu_in**2) - 0.5).sum()
 
-        # Гейты
         if self.config[1] == "L":
             log_alpha_gates = utils.clip_func(2 * self.logsig_gates - utils.safe_torch_log(self.mu_gates**2))
             KL += utils.alpha_regf(log_alpha_gates).sum()
@@ -481,7 +475,6 @@ class BayesianLSTM(LSTM):
         return reg
     
     def get_ard(self):
-        # --- W ---
         if self.config[0] == "L":
             W_in = torch.cat([
                 self.W_in_to_ingate.unsqueeze(0),
@@ -504,7 +497,6 @@ class BayesianLSTM(LSTM):
             mask_w_in = torch.ones((4,) + self.W_in_to_ingate.shape, dtype=torch.bool)
             mask_w_hid = torch.ones((4,) + self.W_hid_to_ingate.shape, dtype=torch.bool)
 
-        # --- neurons ---
         mask_in = mask_w_in.any(dim=2).any(dim=0)
         mask_hid_by_w = mask_w_hid.any(dim=2).any(dim=0)
         mask_hid_by_z = torch.ones_like(mask_hid_by_w, dtype=torch.bool)
@@ -546,7 +538,6 @@ class BayesianLSTM(LSTM):
         dtype = self.dtype
         num_units = self.num_units
 
-        # --- gates_noise ---
         if self.gates_noise is None:
             gates_noise = torch.ones((num_batch, 4, num_units), dtype=dtype, device=device)
         else:
@@ -561,7 +552,6 @@ class BayesianLSTM(LSTM):
             else:
                 raise ValueError(f"Unexpected shape for gates_noise: {g.shape}")
 
-        # --- gates_clip ---
         if self.gates_clip is None:
             gates_clip = torch.ones((1, 4, num_units), dtype=dtype, device=device)
         else:
@@ -653,12 +643,17 @@ class BayesianLSTM(LSTM):
             input_n_o = input_o[:, t, :]
             
             hid_preact = hid @ self.W_hid
+            
+            hidden_w_clip = self.hidden_w_clip.repeat_interleave(self.num_units)
+            hid_preact = hid_preact * hidden_w_clip
             hid_preact_i, hid_preact_f, hid_preact_c, hid_preact_o = torch.chunk(hid_preact, 4, dim=1)
+            
+            # hid_preact_i, hid_preact_f, hid_preact_c, hid_preact_o = torch.chunk(hid_preact, 4, dim=1)
 
-            hid_preact_i = hid_preact_i * self.hidden_w_clip[0]
-            hid_preact_f = hid_preact_f * self.hidden_w_clip[1]
-            hid_preact_c = hid_preact_c * self.hidden_w_clip[2]
-            hid_preact_o = hid_preact_o * self.hidden_w_clip[3]
+            # hid_preact_i = hid_preact_i * self.hidden_w_clip[0]
+            # hid_preact_f = hid_preact_f * self.hidden_w_clip[1]
+            # hid_preact_c = hid_preact_c * self.hidden_w_clip[2]
+            # hid_preact_o = hid_preact_o * self.hidden_w_clip[3]
 
             ingate = self.nonlinearity_ingate((input_n_i + hid_preact_i) * g0_gc0 + self.b_ingate)
             forgetgate = self.nonlinearity_forgetgate((input_n_f + hid_preact_f) * g1_gc1 + self.b_forgetgate)
@@ -684,7 +679,7 @@ class BayesianLSTM(LSTM):
             cell_out[:, t, :] = cell
 
         if self.only_return_final:
-            return hid_out[-1]
+            return hid_out[:, -1, :]
 
         if self.backwards:
             hid_out = hid_out.flip(dims=[1])
@@ -821,8 +816,13 @@ class BayesianDense(Dense):
 
 
 class BayesianDense_noLRT(Dense):
-    def __init__(self, incoming, num_units, log_sigma_init=-3.0,
-                 W_initializer=None, b_init=0.0, nonlinearity=lambda x: x):
+    def __init__(self, 
+                 incoming, 
+                 num_units, 
+                 log_sigma_init=-3.0,
+                 W_initializer=None, 
+                 b_init=0.0, 
+                 nonlinearity=lambda x: x):
         """
         incoming: int (input size) or shape-like with last dim = input size.
         """
@@ -1224,7 +1224,7 @@ class ClassificationNet(nn.Module):
         self.lstm_layer = BayesianLSTM(
             incoming=n_emb,
             num_units=n_hidden,
-            only_return_final=False,
+            only_return_final=True,
             learn_init=False,
             config=config[2:5]
         )
@@ -1242,7 +1242,7 @@ class ClassificationNet(nn.Module):
         """
         emb = self.emb_layer(x, deterministic=deterministic, clip=clip)
         out = self.lstm_layer(emb, deterministic=deterministic, clip=clip)
-        out = out[:, -1, :]
+        # out = out[:, -1, :]
         logits = self.dense(out, deterministic=deterministic, clip=clip)
         return logits
 
